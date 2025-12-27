@@ -33,20 +33,12 @@ deporte = st.sidebar.selectbox("Selecciona Liga:", [
 
 # --- CEREBRO FINANCIERO (KELLY CRITERION) ---
 def calcular_inversion(prob_real, cuota, saldo):
-    # Fórmula de Kelly: % del banco a apostar = (Probabilidad * Cuota - 1) / (Cuota - 1)
-    # Usamos "Kelly Fraccional" (un cuarto) para ser conservadores y no arriesgar mucho
     b = cuota - 1
     p = prob_real / 100
     q = 1 - p
-    
     if b == 0: return 0
     kelly_pct = (b * p - q) / b
-    
-    # Si la ventaja es negativa, no apostar
-    if kelly_pct <= 0:
-        return 0
-    
-    # Apostamos solo una fracción segura (dividir riesgo entre 4)
+    if kelly_pct <= 0: return 0
     apuesta_segura = (saldo * kelly_pct) / 4
     return round(apuesta_segura, 2)
 
@@ -54,37 +46,30 @@ def calcular_inversion(prob_real, cuota, saldo):
 st.title("🤖 Asesor de Rendimiento")
 st.info("Selecciona un partido para calcular cuánto dinero puedes ganar.")
 
-# Obtener datos
 url = f'https://api.the-odds-api.com/v4/sports/{deporte[1]}/odds/?apiKey={API_KEY}&regions=us&markets=h2h&oddsFormat=decimal'
 
 try:
     res = requests.get(url)
     data = res.json()
-    
     partidos_dict = {f"{g['home_team']} vs {g['away_team']}": g for g in data}
     juego = st.selectbox("📅 Próximos Eventos:", list(partidos_dict.keys()))
 
     if st.button("📊 CALCULAR RENDIMIENTO"):
         datos = partidos_dict[juego]
         bookies = datos['bookmakers']
-        
         if bookies:
             odds = bookies[0]['markets'][0]['outcomes']
             local = datos['home_team']
             visita = datos['away_team']
-            
-            # Buscar cuotas
             c_local = next((x['price'] for x in odds if x['name'] == local), 1.0)
             c_visita = next((x['price'] for x in odds if x['name'] == visita), 1.0)
             
-            # Cálculo de Probabilidad Real (Sin margen de casa)
             imp_l = 1/c_local
             imp_v = 1/c_visita
             margen = imp_l + imp_v
             p_real_local = (imp_l / margen) * 100
             p_real_visita = (imp_v / margen) * 100
             
-            # Decisión de la IA
             if p_real_local > p_real_visita:
                 ganador = local
                 prob = p_real_local
@@ -94,33 +79,24 @@ try:
                 prob = p_real_visita
                 cuota = c_visita
             
-            # Calcular cuánto apostar
             monto_sugerido = calcular_inversion(prob, cuota, st.session_state.saldo)
             ganancia_neta = (monto_sugerido * cuota) - monto_sugerido
             roi = ((cuota - 1) * 100)
             
-            # --- RESPUESTA DEL CHAT ---
             with st.chat_message("assistant"):
                 st.write(f"Según mis cálculos, la mejor opción financiera es **{ganador}** ({round(prob,1)}% prob).")
-                
                 if monto_sugerido > 0:
                     st.success("✅ OPORTUNIDAD DE INVERSIÓN DETECTADA")
-                    
                     col1, col2, col3 = st.columns(3)
                     col1.metric("💵 Apostar", f"${monto_sugerido}")
-                    col2.metric("📈 Ganancia Neta", f"${round(ganancia_neta, 2)}")
-                    col3.metric("🚀 Rendimiento", f"{round(roi, 1)}%")
-                    
-                    st.write(f"Si inviertes **${monto_sugerido}**, tu saldo crecería a **${round(st.session_state.saldo + ganancia_neta, 2)}**.")
-                    
-                    # Botón para simular que ganaste
+                    col2.metric("📈 Ganancia", f"${round(ganancia_neta, 2)}")
+                    col3.metric("🚀 ROI", f"{round(roi, 1)}%")
                     if st.button(f"🎉 ¡Simular que {ganador} ganó!"):
                         st.session_state.saldo += ganancia_neta
                         st.rerun()
                 else:
-                    st.warning(f"📉 Rendimiento negativo. Aunque **{ganador}** es favorito, la cuota de {cuota} paga muy poco para el riesgo. **Recomendación: NO APOSTAR.**")
+                    st.warning(f"📉 Rendimiento negativo. No apostar.")
         else:
             st.error("No hay cuotas disponibles.")
-
 except:
     st.write("Conectando con el mercado...")
