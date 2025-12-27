@@ -2,101 +2,125 @@ import streamlit as st
 import pandas as pd
 import requests
 
-st.set_page_config(page_title="Master Analyser", page_icon="🧠", layout="wide")
+# --- CONFIGURACIÓN INICIAL ---
+st.set_page_config(page_title="IA Financiera Yael", page_icon="💰", layout="centered")
 
-# --- TU CONFIGURACIÓN ---
+# Inicializar saldo en la "memoria" de la app (Session State)
+if 'saldo' not in st.session_state:
+    st.session_state.saldo = 24.27  # Tu saldo inicial real
+
 API_KEY = '8d90dd7eb80726fb3a98683ee7d2e734'
-SALDO_REAL = 24.27 
 
-# --- BARRA LATERAL (CONTROLES) ---
-st.sidebar.title("🎛️ Centro de Control")
-st.sidebar.write(f"💰 Saldo: **${SALDO_REAL}**")
+# --- BARRA LATERAL (BILLETERA) ---
+st.sidebar.title("💼 Tu Cartera")
+st.sidebar.markdown(f"""
+    <div style="padding:15px; background-color:#2e2e2e; border-radius:10px; text-align:center;">
+        <h2 style="color:#00ff00; margin:0;">${st.session_state.saldo:.2f}</h2>
+        <p style="color:white; margin:0;">Capital Disponible</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-# 1. Selector de Deporte (Agregué más ligas)
-deporte = st.sidebar.selectbox("1. Selecciona Deporte:", [
+if st.sidebar.button("🔄 Reiniciar Saldo"):
+    st.session_state.saldo = 24.27
+
+st.sidebar.divider()
+deporte = st.sidebar.selectbox("Selecciona Liga:", [
     ('🏀 NBA', 'basketball_nba'),
     ('🏈 NFL', 'americanfootball_nfl'),
     ('⚽ Liga MX', 'soccer_mexico_ligamx'),
-    ('⚽ Premier League', 'soccer_epl'),
-    ('⚽ La Liga (España)', 'soccer_spain_la_liga'),
-    ('⚾ MLB (Béisbol)', 'baseball_mlb'),
-    ('🏒 NHL (Hockey)', 'icehockey_nhl')
+    ('⚽ Premier League', 'soccer_epl')
 ], format_func=lambda x: x[0])
 
-# 2. Selector de Mercado (¡Aquí está lo que pediste!)
-tipo_apuesta = st.sidebar.selectbox("2. ¿Qué buscamos?", [
-    ('🏆 Ganador del Partido', 'h2h'),
-    ('⚖️ Handicap (Ventaja)', 'spreads'),
-    ('🔢 Totales (Alta/Baja)', 'totals'),
-    # Nota: Props de jugadores consumen muchos datos, úsalos con cuidado
-    # ('👤 Puntos de Jugador (NBA)', 'player_points') 
-])
-
-st.title(f"Analizando: {deporte[0]} - {tipo_apuesta[0]}")
-
-# --- BOTÓN DE ACCIÓN ---
-if st.button("🚀 ESCANEAR EL MERCADO COMPLETO"):
-    # Construimos la URL dinámica según lo que elegiste
-    mercado_api = tipo_apuesta[1]
-    url = f'https://api.the-odds-api.com/v4/sports/{deporte[1]}/odds/?apiKey={API_KEY}&regions=us&markets={mercado_api}&oddsFormat=decimal'
+# --- CEREBRO FINANCIERO (KELLY CRITERION) ---
+def calcular_inversion(prob_real, cuota, saldo):
+    # Fórmula de Kelly: % del banco a apostar = (Probabilidad * Cuota - 1) / (Cuota - 1)
+    # Usamos "Kelly Fraccional" (un cuarto) para ser conservadores y no arriesgar mucho
+    b = cuota - 1
+    p = prob_real / 100
+    q = 1 - p
     
-    with st.spinner('Hackeando las líneas de las casas de apuestas...'):
-        try:
-            res = requests.get(url)
-            if res.status_code != 200:
-                st.error(f"Error de conexión. Código: {res.status_code}")
+    if b == 0: return 0
+    kelly_pct = (b * p - q) / b
+    
+    # Si la ventaja es negativa, no apostar
+    if kelly_pct <= 0:
+        return 0
+    
+    # Apostamos solo una fracción segura (dividir riesgo entre 4)
+    apuesta_segura = (saldo * kelly_pct) / 4
+    return round(apuesta_segura, 2)
+
+# --- INTERFAZ PRINCIPAL ---
+st.title("🤖 Asesor de Rendimiento")
+st.info("Selecciona un partido para calcular cuánto dinero puedes ganar.")
+
+# Obtener datos
+url = f'https://api.the-odds-api.com/v4/sports/{deporte[1]}/odds/?apiKey={API_KEY}&regions=us&markets=h2h&oddsFormat=decimal'
+
+try:
+    res = requests.get(url)
+    data = res.json()
+    
+    partidos_dict = {f"{g['home_team']} vs {g['away_team']}": g for g in data}
+    juego = st.selectbox("📅 Próximos Eventos:", list(partidos_dict.keys()))
+
+    if st.button("📊 CALCULAR RENDIMIENTO"):
+        datos = partidos_dict[juego]
+        bookies = datos['bookmakers']
+        
+        if bookies:
+            odds = bookies[0]['markets'][0]['outcomes']
+            local = datos['home_team']
+            visita = datos['away_team']
+            
+            # Buscar cuotas
+            c_local = next((x['price'] for x in odds if x['name'] == local), 1.0)
+            c_visita = next((x['price'] for x in odds if x['name'] == visita), 1.0)
+            
+            # Cálculo de Probabilidad Real (Sin margen de casa)
+            imp_l = 1/c_local
+            imp_v = 1/c_visita
+            margen = imp_l + imp_v
+            p_real_local = (imp_l / margen) * 100
+            p_real_visita = (imp_v / margen) * 100
+            
+            # Decisión de la IA
+            if p_real_local > p_real_visita:
+                ganador = local
+                prob = p_real_local
+                cuota = c_local
             else:
-                data = res.json()
-                st.success(f"✅ Se encontraron {len(data)} eventos disponibles.")
+                ganador = visita
+                prob = p_real_visita
+                cuota = c_visita
+            
+            # Calcular cuánto apostar
+            monto_sugerido = calcular_inversion(prob, cuota, st.session_state.saldo)
+            ganancia_neta = (monto_sugerido * cuota) - monto_sugerido
+            roi = ((cuota - 1) * 100)
+            
+            # --- RESPUESTA DEL CHAT ---
+            with st.chat_message("assistant"):
+                st.write(f"Según mis cálculos, la mejor opción financiera es **{ganador}** ({round(prob,1)}% prob).")
                 
-                # --- VISUALIZACIÓN DE TARJETAS ---
-                for juego in data:
-                    with st.expander(f"📅 {juego['home_team']} vs {juego['away_team']}"):
-                        
-                        # Buscamos las cuotas dentro de los datos
-                        if not juego['bookmakers']:
-                            st.write("⚠️ No hay cuotas abiertas aún.")
-                            continue
-                            
-                        # Usamos la primera casa (generalmente DraftKings o FanDuel en la API)
-                        bookie = juego['bookmakers'][0]
-                        mercados = bookie['markets']
-                        
-                        if not mercados:
-                            st.write("🔒 Mercado cerrado.")
-                            continue
-                            
-                        opciones = mercados[0]['outcomes']
-                        
-                        # CREAMOS UNA TABLA BONITA
-                        filas = []
-                        for op in opciones:
-                            nombre = op['name']
-                            cuota = op['price']
-                            # Si es Handicap o Total, mostramos el punto (ej. -5.5 o 220.5)
-                            punto = op.get('point', '') 
-                            
-                            # Lógica de Kelly simple para sugerencia
-                            prob_estimada = 1/cuota # Probabilidad implícita base
-                            # Ajuste defensivo: Solo sugerimos si la cuota paga bien
-                            sugerencia = "Observar"
-                            monto = 0
-                            if cuota > 1.90: 
-                                sugerencia = "✅ VALOR PROBABLE"
-                                monto = SALDO_REAL * 0.02 # 2% del banco
-                            
-                            filas.append({
-                                "Selección": nombre,
-                                "Línea/Puntos": punto,
-                                "Cuota (Momio)": cuota,
-                                "Estado": sugerencia,
-                                "Apuesta Sugerida": f"${round(monto, 2)}" if monto > 0 else "$0.00"
-                            })
-                        
-                        st.table(pd.DataFrame(filas))
-                        st.caption(f"Datos provistos por: {bookie['title']}")
+                if monto_sugerido > 0:
+                    st.success("✅ OPORTUNIDAD DE INVERSIÓN DETECTADA")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("💵 Apostar", f"${monto_sugerido}")
+                    col2.metric("📈 Ganancia Neta", f"${round(ganancia_neta, 2)}")
+                    col3.metric("🚀 Rendimiento", f"{round(roi, 1)}%")
+                    
+                    st.write(f"Si inviertes **${monto_sugerido}**, tu saldo crecería a **${round(st.session_state.saldo + ganancia_neta, 2)}**.")
+                    
+                    # Botón para simular que ganaste
+                    if st.button(f"🎉 ¡Simular que {ganador} ganó!"):
+                        st.session_state.saldo += ganancia_neta
+                        st.rerun()
+                else:
+                    st.warning(f"📉 Rendimiento negativo. Aunque **{ganador}** es favorito, la cuota de {cuota} paga muy poco para el riesgo. **Recomendación: NO APOSTAR.**")
+        else:
+            st.error("No hay cuotas disponibles.")
 
-        except Exception as e:
-            st.error(f"Ocurrió un error al procesar los datos: {e}")
-
-st.info("ℹ️ Selecciona 'Handicap' o 'Totales' en el menú de la izquierda para ver líneas de puntos y goles.")
+except:
+    st.write("Conectando con el mercado...")
