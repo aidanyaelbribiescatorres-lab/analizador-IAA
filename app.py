@@ -2,88 +2,133 @@ import streamlit as st
 import pandas as pd
 import requests
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="ChatIA Apuestas", page_icon="🤖", layout="centered")
+# --- CONFIGURACIÓN ESTILO CHATGPT ---
+st.set_page_config(page_title="IA Apuestas Yael", page_icon="🤖", layout="centered")
 
-# Memoria del dinero
+# Memoria del dinero y del chat
 if 'saldo' not in st.session_state:
     st.session_state.saldo = 24.27 
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
 API_KEY = '8d90dd7eb80726fb3a98683ee7d2e734'
 
-# --- BARRA LATERAL ---
-st.sidebar.title("💳 Mi Cuenta")
+# --- BARRA LATERAL (TU DINERO) ---
+st.sidebar.title("💳 Tu Banca")
 st.sidebar.markdown(f"""
-    <div style="background-color:#1E1E1E; padding:15px; border-radius:10px; text-align:center; border: 1px solid #333;">
-        <h3 style="color:#00FF00; margin:0;">${st.session_state.saldo:.2f}</h3>
-        <p style="color:#888; margin:0; font-size:12px;">Saldo Actual</p>
+    <div style="background-color:#222; padding:10px; border-radius:10px; text-align:center; border: 1px solid #444;">
+        <h2 style="color:#00FF00; margin:0;">${st.session_state.saldo:.2f}</h2>
     </div>
     """, unsafe_allow_html=True)
 
-deporte = st.sidebar.selectbox("Liga:", [
+deporte = st.sidebar.selectbox("Selecciona Liga:", [
     ('🏀 NBA', 'basketball_nba'),
     ('🏈 NFL', 'americanfootball_nfl'),
-    ('⚽ Liga MX', 'soccer_mexico_ligamx'),
+    ('⚾ MLB', 'baseball_mlb'),
     ('⚽ Premier League', 'soccer_epl')
 ], format_func=lambda x: x[0])
 
-# --- PANTALLA PRINCIPAL ---
-st.title("💬 Chat con IA Financiera")
-st.caption("Selecciona un partido y presiona 'ENVIAR PREGUNTA' para iniciar la conversación.")
+st.sidebar.info("💡 **Tip:** Escribe el nombre del equipo en el chat para analizarlo.")
 
-# Obtener partidos
-url = f'https://api.the-odds-api.com/v4/sports/{deporte[1]}/odds/?apiKey={API_KEY}&regions=us&markets=h2h&oddsFormat=decimal'
+# --- TÍTULO ---
+st.title("💬 Chat Inteligente")
+st.caption("Escribe algo como: '¿Analiza a los Lakers?' o '¿Quién gana entre Real Madrid y Barça?'")
 
-try:
-    res = requests.get(url)
-    data = res.json()
-    partidos_dict = {f"{g['home_team']} vs {g['away_team']}": g for g in data}
+# --- MOSTRAR HISTORIAL DEL CHAT ---
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# --- CEREBRO: PROCESAR TU MENSAJE ---
+def responder_usuario(pregunta, datos_api):
+    pregunta = pregunta.lower()
     
-    # Selector de pregunta
-    juego_seleccionado = st.selectbox("¿Sobre qué partido quieres preguntar?", list(partidos_dict.keys()))
+    # Buscar si mencionó algún equipo
+    juego_encontrado = None
+    equipo_mencionado = ""
     
-    # --- BOTÓN DE CHAT ---
-    if st.button("📩 ENVIAR PREGUNTA"):
+    for juego in datos_api:
+        local = juego['home_team'].lower()
+        visita = juego['away_team'].lower()
         
-        # 1. TU BURBUJA
-        with st.chat_message("user"):
-            st.write(f"Hola IA. ¿Me conviene apostar en **{juego_seleccionado}**?")
+        # Inteligencia de búsqueda (busca palabras clave)
+        if local in pregunta or visita in pregunta or \
+           local.split()[-1] in pregunta or visita.split()[-1] in pregunta: 
+            juego_encontrado = juego
+            equipo_mencionado = juego['home_team'] if local in pregunta else juego['away_team']
+            break
+    
+    if juego_encontrado:
+        # Calcular Matemáticas
+        bookies = juego_encontrado['bookmakers']
+        if not bookies: return "Ese partido no tiene cuotas disponibles todavía. 🛑"
         
-        # 2. RESPUESTA DE LA IA
-        datos = partidos_dict[juego_seleccionado]
-        bookies = datos['bookmakers']
+        odds = bookies[0]['markets'][0]['outcomes']
+        loc_name = juego_encontrado['home_team']
+        vis_name = juego_encontrado['away_team']
         
-        if bookies:
-            odds = bookies[0]['markets'][0]['outcomes']
-            local, visita = datos['home_team'], datos['away_team']
-            c_local = next((x['price'] for x in odds if x['name'] == local), 1.0)
-            c_visita = next((x['price'] for x in odds if x['name'] == visita), 1.0)
-            
-            # Cálculo rápido
-            imp_l, imp_v = 1/c_local, 1/c_visita
-            margen = imp_l + imp_v
-            p_real_l = (imp_l / margen) * 100
-            p_real_v = (imp_v / margen) * 100
-            
-            if p_real_l > p_real_v:
-                pick, prob, cuota = local, p_real_l, c_local
-            else:
-                pick, prob, cuota = visita, p_real_v, c_visita
-                
-            kelly = ((cuota - 1) * (prob/100) - (1 - (prob/100))) / (cuota - 1)
-            apuesta = (st.session_state.saldo * kelly) / 4 if kelly > 0 else 0
-            ganancia = (apuesta * cuota) - apuesta
-
-            with st.chat_message("assistant"):
-                st.write(f"Analizando **{local}** vs **{visita}**... 🧠")
-                if apuesta > 0:
-                    st.success(f"✅ SÍ. **{pick}** es favorito con {round(prob,1)}%.")
-                    st.metric("Debes apostar:", f"${round(apuesta, 2)}")
-                    st.write(f"Ganancia esperada: **${round(ganancia, 2)}**")
-                else:
-                    st.error("⛔ NO APOSTAR. Riesgo demasiado alto.")
+        # Extraer cuotas
+        c_loc = next((x['price'] for x in odds if x['name'] == loc_name), 1.0)
+        c_vis = next((x['price'] for x in odds if x['name'] == vis_name), 1.0)
+        
+        # Probabilidades
+        impl_l, impl_v = 1/c_loc, 1/c_vis
+        margen = impl_l + impl_v
+        p_real_l = (impl_l/margen)*100
+        p_real_v = (impl_v/margen)*100
+        
+        # Decisión
+        if p_real_l > p_real_v:
+            fav, prob, cuota = loc_name, p_real_l, c_loc
         else:
-            st.warning("No hay datos suficientes para este partido.")
+            fav, prob, cuota = vis_name, p_real_v, c_vis
+            
+        # Kelly (Dinero)
+        b = cuota - 1
+        p = prob/100
+        q = 1 - p
+        kelly = (b*p - q)/b if b > 0 else 0
+        apuesta = (st.session_state.saldo * kelly) / 4 if kelly > 0 else 0
+        ganancia = (apuesta * cuota) - apuesta
+        
+        respuesta = f"📊 **Análisis del {loc_name} vs {vis_name}:**\n\n"
+        respuesta += f"El favorito matemático es **{fav}** con un **{round(prob,1)}%** de probabilidad.\n\n"
+        
+        if apuesta > 0.5:
+            respuesta += f"✅ **Recomendación:** ¡Apuesta con valor!\n"
+            respuesta += f"- 💰 Métele: **${round(apuesta, 2)}**\n"
+            respuesta += f"- 📈 Ganarías: **${round(ganancia, 2)}** limpios.\n\n"
+            respuesta += "Si ganas, avísame escribiendo 'ganamos' para sumar tu saldo."
+        else:
+            respuesta += f"⚠️ **Cuidado:** Aunque {fav} es favorito, la cuota paga muy poco. Mejor **no apuestes** tu dinero aquí."
+            
+        return respuesta
+        
+    elif "ganamos" in pregunta:
+        # Truco para sumar dinero manual
+        st.session_state.saldo += 1.50 # Suma fija simulada
+        return "¡Eso es todo! 🎉 He sumado ganancias a tu cuenta. ¿Cuál es el siguiente partido?"
+        
+    else:
+        return "🤔 No encontré ese equipo en la liga seleccionada hoy. Intenta escribir el nombre exacto (ej: 'Warriors' o 'Arsenal')."
 
-except:
-    st.info("Conectando con la base de datos...")
+# --- INPUT DEL CHAT (LO QUE TÚ ESCRIBES) ---
+if prompt := st.chat_input("Escribe tu pregunta aquí..."):
+    # 1. Mostrar lo que tú escribiste
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # 2. Obtener datos y pensar respuesta
+    url = f'https://api.the-odds-api.com/v4/sports/{deporte[1]}/odds/?apiKey={API_KEY}&regions=us&markets=h2h&oddsFormat=decimal'
+    try:
+        res = requests.get(url)
+        datos = res.json()
+        respuesta_ia = responder_usuario(prompt, datos)
+    except:
+        respuesta_ia = "Error de conexión con las casas de apuestas. Intenta de nuevo."
+
+    # 3. Mostrar respuesta de la IA
+    st.session_state.messages.append({"role": "assistant", "content": respuesta_ia})
+    with st.chat_message("assistant"):
+        st.markdown(respuesta_ia)
