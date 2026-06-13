@@ -1,130 +1,98 @@
 /**
- * /api/analizar-comprobante — Analiza foto de comprobante de apuesta con Claude
+ * /api/analizar-comprobante — Analiza foto de comprobante de apuesta con Gemini (GRATIS)
+ *
+ * Usa Google Gemini 1.5 Flash — plan gratuito:
+ *   • 1,500 requests/día
+ *   • 15 requests/minuto
+ *   • Sin tarjeta de crédito requerida
+ *   → Obtén tu key GRATIS en: https://aistudio.google.com/apikey
  *
  * POST /api/analizar-comprobante
  * Body (JSON):
  *   {
- *     "image": "<base64>",          // imagen en base64 (sin prefijo data:...)
- *     "mediaType": "image/jpeg"     // "image/jpeg" | "image/png" | "image/webp" | "image/gif"
+ *     "image": "<base64>",          // imagen en base64 (con o sin prefijo data:...)
+ *     "mediaType": "image/jpeg"     // "image/jpeg" | "image/png" | "image/webp"
  *   }
  *
- * Respuesta:
- *   {
- *     "ok": true,
- *     "apuesta": {
- *       "casa": "Bet365",
- *       "fecha": "2025-06-13",
- *       "monto_apostado": 150.00,
- *       "cuota": 2.50,
- *       "ganancia_potencial": 375.00,
- *       "deporte": "Fútbol",
- *       "evento": "Real Madrid vs Barcelona",
- *       "seleccion": "Real Madrid gana",
- *       "estado": "Pendiente | Ganada | Perdida",
- *       "id_apuesta": "ABC123",
- *       "notas": "..."
- *     },
- *     "resumen": "Texto legible del análisis"
- *   }
+ * Variable de entorno requerida: GEMINI_API_KEY
  */
 
-const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
+const GEMINI_URL =
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
 
-const SYSTEM_PROMPT = `Eres un asistente especializado en analizar comprobantes y tickets de apuestas deportivas.
-Tu tarea es extraer toda la información relevante de la imagen del comprobante y devolverla en formato JSON estricto.
-
-SIEMPRE responde ÚNICAMENTE con un objeto JSON válido, sin texto adicional antes ni después.
-Si no puedes leer algún campo, usa null para ese campo.
-Los montos deben ser números (no strings).`;
-
-const USER_PROMPT = `Analiza este comprobante de apuesta y extrae toda la información en el siguiente formato JSON exacto:
+const PROMPT = `Eres un asistente que analiza comprobantes y tickets de apuestas deportivas.
+Extrae toda la información del comprobante en el siguiente formato JSON exacto.
+Responde ÚNICAMENTE con el JSON, sin texto adicional, sin bloques de código.
+Si no puedes leer un campo usa null. Los montos deben ser números (no strings).
 
 {
-  "casa": "nombre de la casa de apuestas (ej: Bet365, Codere, Betano, 1xBet, etc.)",
-  "fecha": "fecha de la apuesta en formato YYYY-MM-DD o null",
+  "casa": "nombre de la casa de apuestas (Bet365, Codere, Betano, 1xBet, Caliente, etc.)",
+  "fecha": "YYYY-MM-DD o null",
   "monto_apostado": número o null,
   "cuota": número o null,
   "ganancia_potencial": número o null,
-  "deporte": "Fútbol, Básquetbol, Béisbol, etc. o null",
-  "evento": "nombre del partido o evento apostado",
-  "seleccion": "qué selección/pronóstico se hizo (ej: Local gana, +2.5 goles, etc.)",
-  "estado": "Pendiente, Ganada, Perdida, Anulada o null si no se ve",
-  "id_apuesta": "ID o número de ticket si aparece, o null",
-  "moneda": "MXN, USD, EUR, etc. o null",
-  "notas": "cualquier información adicional relevante del ticket"
-}
+  "deporte": "Fútbol | Básquetbol | Béisbol | etc. o null",
+  "evento": "nombre del partido o evento",
+  "seleccion": "qué pronóstico se hizo (ej: Local gana, +2.5 goles, Ambos anotan)",
+  "estado": "Pendiente | Ganada | Perdida | Anulada | null",
+  "id_apuesta": "ID o número de ticket o null",
+  "moneda": "MXN | USD | EUR | etc. o null",
+  "notas": "cualquier otro dato relevante del ticket"
+}`;
 
-Responde SOLO con el JSON, sin explicaciones.`;
-
-async function callClaude(base64Image, mediaType) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY no configurada");
+async function callGemini(base64Image, mediaType) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY no configurada. Obtén una gratis en https://aistudio.google.com/apikey");
 
   const body = {
-    model: "claude-opus-4-8",
-    max_tokens: 1024,
-    system: SYSTEM_PROMPT,
-    messages: [
+    contents: [
       {
-        role: "user",
-        content: [
+        parts: [
           {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: mediaType,
+            inline_data: {
+              mime_type: mediaType,
               data: base64Image,
             },
           },
-          {
-            type: "text",
-            text: USER_PROMPT,
-          },
+          { text: PROMPT },
         ],
       },
     ],
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 1024,
+    },
   };
 
-  const res = await fetch(ANTHROPIC_API, {
+  const res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Claude API ${res.status}: ${err}`);
+    throw new Error(`Gemini API ${res.status}: ${err}`);
   }
 
   const data = await res.json();
-  const text = data?.content?.[0]?.text ?? "";
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  if (!text) throw new Error("Gemini no devolvió respuesta");
   return text;
 }
 
 function buildResumen(apuesta) {
   const lineas = [];
-
-  if (apuesta.casa)            lineas.push(`🏠 Casa: ${apuesta.casa}`);
-  if (apuesta.fecha)           lineas.push(`📅 Fecha: ${apuesta.fecha}`);
-  if (apuesta.evento)          lineas.push(`⚽ Evento: ${apuesta.evento}`);
-  if (apuesta.seleccion)       lineas.push(`🎯 Selección: ${apuesta.seleccion}`);
-  if (apuesta.monto_apostado != null) {
-    const moneda = apuesta.moneda ?? "";
-    lineas.push(`💰 Monto apostado: ${moneda} ${apuesta.monto_apostado}`);
-  }
-  if (apuesta.cuota != null)   lineas.push(`📊 Cuota: ${apuesta.cuota}`);
-  if (apuesta.ganancia_potencial != null) {
-    const moneda = apuesta.moneda ?? "";
-    lineas.push(`🤑 Ganancia potencial: ${moneda} ${apuesta.ganancia_potencial}`);
-  }
-  if (apuesta.estado)          lineas.push(`✅ Estado: ${apuesta.estado}`);
-  if (apuesta.id_apuesta)      lineas.push(`🎫 Ticket ID: ${apuesta.id_apuesta}`);
-  if (apuesta.notas)           lineas.push(`📝 Notas: ${apuesta.notas}`);
-
+  if (apuesta.casa)                    lineas.push(`Casa: ${apuesta.casa}`);
+  if (apuesta.fecha)                   lineas.push(`Fecha: ${apuesta.fecha}`);
+  if (apuesta.evento)                  lineas.push(`Evento: ${apuesta.evento}`);
+  if (apuesta.seleccion)               lineas.push(`Seleccion: ${apuesta.seleccion}`);
+  if (apuesta.monto_apostado != null)  lineas.push(`Monto apostado: ${apuesta.moneda ?? ""} ${apuesta.monto_apostado}`);
+  if (apuesta.cuota != null)           lineas.push(`Cuota: ${apuesta.cuota}`);
+  if (apuesta.ganancia_potencial != null) lineas.push(`Ganancia potencial: ${apuesta.moneda ?? ""} ${apuesta.ganancia_potencial}`);
+  if (apuesta.estado)                  lineas.push(`Estado: ${apuesta.estado}`);
+  if (apuesta.id_apuesta)              lineas.push(`Ticket ID: ${apuesta.id_apuesta}`);
+  if (apuesta.notas)                   lineas.push(`Notas: ${apuesta.notas}`);
   return lineas.join("\n");
 }
 
@@ -134,7 +102,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Método no permitido. Usa POST." });
+  if (req.method !== "POST")   return res.status(405).json({ error: "Usa POST." });
 
   let body;
   try {
@@ -145,24 +113,22 @@ export default async function handler(req, res) {
 
   const { image, mediaType = "image/jpeg" } = body ?? {};
 
-  if (!image) {
-    return res.status(400).json({ error: "Campo 'image' requerido (base64 de la imagen)." });
-  }
+  if (!image) return res.status(400).json({ error: "Campo 'image' requerido (base64)." });
 
-  const validTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+  const validTypes = ["image/jpeg", "image/png", "image/webp"];
   if (!validTypes.includes(mediaType)) {
     return res.status(400).json({ error: `mediaType inválido. Usa: ${validTypes.join(", ")}` });
   }
 
-  // Strip data URL prefix if user sent it
+  // Quitar prefijo data URL si viene incluido
   const base64Clean = image.replace(/^data:image\/[a-z]+;base64,/, "");
 
   try {
-    const rawText = await callClaude(base64Clean, mediaType);
+    const rawText = await callGemini(base64Clean, mediaType);
 
-    // Extract JSON from Claude's response
+    // Extraer JSON de la respuesta
     const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("Claude no devolvió JSON válido");
+    if (!jsonMatch) throw new Error("No se encontró JSON en la respuesta");
 
     const apuesta = JSON.parse(jsonMatch[0]);
     const resumen = buildResumen(apuesta);
