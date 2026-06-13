@@ -6,9 +6,9 @@ const BASE = process.env.NEXT_PUBLIC_API_URL || "";   // déjalo vacío si la AP
 /**
  * Obtiene los jugadores y estadísticas de un equipo.
  *
- * @param {string} team     - Nombre del equipo ("Lakers", "Warriors", "Chiefs")
- * @param {string} sport    - "basketball" | "football" | "baseball" | "hockey"
- * @param {string} league   - "nba" | "nfl" | "mlb" | "nhl"
+ * @param {string} team     - Nombre del equipo ("Lakers", "Barcelona", "Chiefs")
+ * @param {string} sport    - "basketball" | "football" | "baseball" | "hockey" | "soccer"
+ * @param {string} league   - "nba" | "nfl" | "mlb" | "nhl" | "eng.1" | "esp.1" | "ita.1" | "ger.1" | "mex.1" | "usa.1" | "uefa.champions"
  * @param {number} limit    - Máximo de jugadores (default 15)
  * @param {boolean} stats   - Incluir estadísticas (default true)
  */
@@ -61,21 +61,43 @@ export async function fetchPlayers(team, sport = "basketball", league = "nba", l
 }
 */
 
+// ── Ligas de fútbol disponibles ──────────────────────────────────────────────
+export const SOCCER_LEAGUES = {
+  "eng.1":          "Premier League",
+  "esp.1":          "La Liga",
+  "ita.1":          "Serie A",
+  "ger.1":          "Bundesliga",
+  "fra.1":          "Ligue 1",
+  "mex.1":          "Liga MX",
+  "usa.1":          "MLS",
+  "uefa.champions": "Champions League",
+};
+
 // ── Ejemplos de uso ──────────────────────────────────────────────────────────
 
-// NBA
-// fetchPlayers("Lakers", "basketball", "nba")
+// ⚽ Fútbol
+// fetchPlayers("Barcelona",  "soccer", "esp.1")         // La Liga
+// fetchPlayers("Arsenal",    "soccer", "eng.1")         // Premier League
+// fetchPlayers("Inter",      "soccer", "ita.1")         // Serie A
+// fetchPlayers("Bayern",     "soccer", "ger.1")         // Bundesliga
+// fetchPlayers("America",    "soccer", "mex.1")         // Liga MX
+// fetchPlayers("Galaxy",     "soccer", "usa.1")         // MLS
+// fetchPlayers("Real Madrid","soccer", "uefa.champions")
+
+// 🏀 NBA
+// fetchPlayers("Lakers",   "basketball", "nba")
 // fetchPlayers("Warriors", "basketball", "nba")
 
-// NFL
-// fetchPlayers("Chiefs", "football", "nfl")
+// 🏈 NFL
+// fetchPlayers("Chiefs",  "football", "nfl")
 // fetchPlayers("Cowboys", "football", "nfl")
 
-// MLB
+// ⚾ MLB
 // fetchPlayers("Dodgers", "baseball", "mlb")
 
-// NHL
+// 🏒 NHL
 // fetchPlayers("Oilers", "hockey", "nhl")
 
 // Por team_id exacto de ESPN (más rápido, sin búsqueda)
-// fetch("/api/players?team_id=13&sport=basketball&league=nba")
+// fetch("/api/players?team_id=83&sport=soccer&league=esp.1")   // Barcelona
+// fetch("/api/players?team_id=13&sport=basketball&league=nba") // Lakers

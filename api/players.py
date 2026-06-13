@@ -1,13 +1,15 @@
 """
 Vercel serverless function: /api/players
-Returns NBA/NFL/MLB/NHL player stats from ESPN public API.
+Returns NBA/NFL/MLB/NHL/Soccer player stats from ESPN public API.
 
 Usage:
   GET /api/players?team=Lakers&sport=basketball&league=nba
   GET /api/players?team=Chiefs&sport=football&league=nfl
   GET /api/players?team=Dodgers&sport=baseball&league=mlb
   GET /api/players?team=Oilers&sport=hockey&league=nhl
-  GET /api/players?team_id=13&sport=basketball&league=nba   (exact ESPN team ID)
+  GET /api/players?team=Barcelona&sport=soccer&league=esp.1
+  GET /api/players?team=Arsenal&sport=soccer&league=eng.1
+  GET /api/players?team_id=83&sport=soccer&league=esp.1   (exact ESPN team ID)
 """
 
 from http.server import BaseHTTPRequestHandler
@@ -22,6 +24,7 @@ STAT_MAPS = {
     "football":   ["PYDS","PTD","RUYDS","RUTD","REC","REYDS","RETD","SACKS","INT","QBR"],
     "baseball":   ["AVG","HR","RBI","SB","OBP","SLG","OPS","ERA","WHIP","K"],
     "hockey":     ["G","A","PTS","PPG","+/-","PIM","SOG","GF","GA","SV%"],
+    "soccer":     ["G","A","SH","SHG","FC","YC","RC","OFF","MIN","APP","GK_SV","GK_GA"],
 }
 
 STAT_LABELS = {
@@ -35,8 +38,27 @@ STAT_LABELS = {
     "AVG":"Promedio","HR":"HR","RBI":"RBI","SB":"Bases robadas","OBP":"OBP","SLG":"SLG",
     "OPS":"OPS","ERA":"ERA","WHIP":"WHIP","K":"Strikeouts",
     # Hockey
-    "G":"Goles","A":"Asistencias","PTS":"Puntos","PPG":"PP Goles","+/-":"+/-",
-    "PIM":"Min. penalti","SOG":"Tiros","GF":"GF","GA":"GA","SV%":"SV%",
+    "GF":"GF","GA":"GA","SV%":"SV%","PPG":"PP Goles","PIM":"Min. penalti","SOG":"Tiros",
+    # Soccer
+    "G":"Goles","A":"Asistencias","SH":"Tiros","SHG":"Tiros al arco",
+    "FC":"Faltas cometidas","YC":"Tarjetas amarillas","RC":"Tarjetas rojas",
+    "OFF":"Fueras de juego","APP":"Partidos","GK_SV":"Paradas","GK_GA":"Goles recibidos",
+    # Shared (keep last so hockey "+/-" wins)
+    "+/-":"+/-",
+}
+
+# ESPN soccer leagues — used to validate/route requests
+SOCCER_LEAGUES = {
+    "eng.1":          "Premier League",
+    "esp.1":          "La Liga",
+    "ita.1":          "Serie A",
+    "ger.1":          "Bundesliga",
+    "fra.1":          "Ligue 1",
+    "mex.1":          "Liga MX",
+    "usa.1":          "MLS",
+    "uefa.champions": "Champions League",
+    "fifa.world":     "Copa del Mundo",
+    "conmebol.copa":  "Copa América",
 }
 
 
@@ -104,11 +126,20 @@ def fetch_stats(sport, league, player_id, want_keys):
         data = _get(f"{ESPN_CMVN}/{sport}/{league}/athletes/{player_id}/stats")
         raw = {}
         for cat in data.get("splits", {}).get("categories", []):
+            cat_name = cat.get("name", "").lower()
             for x in cat.get("stats", []):
                 k = x.get("abbreviation", "")
                 v = x.get("value")
-                if v is not None:
-                    raw[k] = v
+                if v is None:
+                    continue
+                raw[k] = v
+                # Map soccer goalkeeper stats with GK_ prefix to distinguish from field stats
+                if sport == "soccer" and cat_name in ("goalkeeping", "goalkeeper"):
+                    if k == "SV":
+                        raw["GK_SV"] = v
+                    elif k == "GA":
+                        raw["GK_GA"] = v
+
         result = {}
         for k in want_keys:
             v = raw.get(k)
@@ -119,13 +150,23 @@ def fetch_stats(sport, league, player_id, want_keys):
         return {}
 
 
+SOCCER_GK_STATS  = ["APP","MIN","GK_SV","GK_GA","YC","RC"]
+SOCCER_FLD_STATS = ["G","A","SH","SHG","FC","YC","RC","OFF","APP","MIN"]
+
 def build_response(sport, league, team_id, limit, include_stats):
     want = STAT_MAPS.get(sport, STAT_MAPS["basketball"])
-    labels = {k: STAT_LABELS.get(k, k) for k in want}
+    labels = {k: STAT_LABELS.get(k, k) for k in set(want + SOCCER_GK_STATS + SOCCER_FLD_STATS)}
 
     players = fetch_roster(sport, league, team_id)[:limit]
     out = []
     for p in players:
+        is_gk = p["position"] in ("GK", "G", "Goalkeeper", "Portero")
+        # For soccer pick stat set per position
+        if sport == "soccer":
+            keys = SOCCER_GK_STATS if is_gk else SOCCER_FLD_STATS
+        else:
+            keys = want
+
         entry = {
             "id":       p["id"],
             "name":     p["name"],
@@ -135,14 +176,15 @@ def build_response(sport, league, team_id, limit, include_stats):
             "stats":    {},
         }
         if include_stats and p["id"]:
-            entry["stats"] = fetch_stats(sport, league, p["id"], want)
+            entry["stats"] = fetch_stats(sport, league, p["id"], keys)
         out.append(entry)
 
     return {
         "sport":       sport,
         "league":      league,
+        "league_name": SOCCER_LEAGUES.get(league, league) if sport == "soccer" else league.upper(),
         "team_id":     team_id,
-        "stat_labels": labels,
+        "stat_labels": {k: STAT_LABELS.get(k, k) for k in set(want + SOCCER_GK_STATS + SOCCER_FLD_STATS)},
         "players":     out,
     }
 
