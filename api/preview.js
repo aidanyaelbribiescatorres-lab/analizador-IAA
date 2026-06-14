@@ -1,27 +1,17 @@
 /**
- * /api/preview — Promedios de jugadores de AMBOS equipos antes de un partido
- *
- * Ideal para analizar un partido ANTES de que empiece: te da los promedios
- * de temporada de los jugadores clave de los dos equipos que se enfrentan.
+ * /api/preview — Promedios + PREDICCIÓN de ambos equipos antes de un partido
  *
  * GET /api/preview?sport=basketball&league=nba&event_id=401585857
- *     → usa un partido del scoreboard (ESPN event ID)
- *
  * GET /api/preview?sport=soccer&league=esp.1&home=Real Madrid&away=Barcelona
- *     → busca los dos equipos por nombre
- *
  * GET /api/preview?sport=basketball&league=nba&home_id=13&away_id=14
- *     → por ID exacto de ESPN (más rápido)
  *
  * Params:
  *   sport     basketball | football | baseball | hockey | soccer
  *   league    nba | nfl | mlb | nhl | eng.1 | esp.1 | ita.1 | ger.1 | fra.1 | mex.1 | usa.1 | uefa.champions
- *   event_id  ESPN event ID (opcional — toma los dos equipos del partido)
- *   home      nombre equipo local (si no usas event_id)
- *   away      nombre equipo visitante
- *   home_id   ESPN team ID local (más rápido)
- *   away_id   ESPN team ID visitante
- *   limit     max jugadores por equipo (default 12, max 25)
+ *   event_id  ESPN event ID
+ *   home / away   nombres de equipos
+ *   home_id / away_id   IDs ESPN
+ *   limit     jugadores por equipo (default 12, max 25)
  */
 
 const ESPN_SITE = "https://site.api.espn.com/apis/site/v2/sports";
@@ -57,7 +47,7 @@ const SOCCER_LEAGUES = {
   "uefa.champions":"Champions League","fifa.world":"Copa del Mundo",
 };
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ESPN ────────────────────────────────────────────────────────────
 
 async function espnGet(url, params = {}) {
   const qs = new URLSearchParams(params).toString();
@@ -71,13 +61,10 @@ async function findTeamId(sport, league, name) {
   const data = await espnGet(`${ESPN_SITE}/${sport}/${league}/teams`, { limit: 100 });
   const teams = data?.sports?.[0]?.leagues?.[0]?.teams ?? [];
   const nl = name.toLowerCase();
-
   let bestId = null, bestScore = 0;
   for (const t of teams) {
     const tm = t.team ?? {};
-    const candidates = [
-      tm.displayName, tm.shortDisplayName, tm.abbreviation, tm.name, tm.nickname,
-    ].filter(Boolean);
+    const candidates = [tm.displayName, tm.shortDisplayName, tm.abbreviation, tm.name, tm.nickname].filter(Boolean);
     for (const c of candidates) {
       const cl = c.toLowerCase();
       if (cl === nl) return tm.id;
@@ -90,14 +77,11 @@ async function findTeamId(sport, league, name) {
   return bestId;
 }
 
-// Obtiene los dos equipos (id, nombre, logo) y datos del partido desde un event_id
 async function fetchMatchTeams(sport, league, eventId) {
   const data = await espnGet(`${ESPN_SITE}/${sport}/${league}/summary`, { event: eventId });
   const comp = data?.header?.competitions?.[0] ?? {};
-  const competitors = comp.competitors ?? [];
-
   let home = null, away = null;
-  for (const c of competitors) {
+  for (const c of comp.competitors ?? []) {
     const team = c.team ?? {};
     const obj = {
       id:   team.id ?? "",
@@ -106,16 +90,14 @@ async function fetchMatchTeams(sport, league, eventId) {
       logo: team.logo ?? (team.logos?.[0]?.href ?? ""),
     };
     if (c.homeAway === "home") home = obj;
-    else if (c.homeAway === "away") away = obj;
+    else away = obj;
   }
-
   const meta = {
-    name:  data?.header?.competitions?.[0]?.competitors ? `${away?.name ?? ""} @ ${home?.name ?? ""}` : "",
+    name:  `${away?.name ?? ""} @ ${home?.name ?? ""}`,
     date:  comp.date ?? "",
     venue: comp.venue?.fullName ?? data?.gameInfo?.venue?.fullName ?? "",
     status: comp.status?.type?.description ?? "",
   };
-
   return { home, away, meta };
 }
 
@@ -159,31 +141,161 @@ async function fetchStats(sport, league, playerId, wantKeys) {
       if (raw[k] != null) result[k] = Math.round(raw[k] * 10) / 10;
     }
     return result;
-  } catch {
-    return {};
-  }
+  } catch { return {}; }
 }
 
-// Construye un equipo completo: info + jugadores con promedios
 async function buildTeam(sport, league, teamMeta, limit) {
   const wantKeys = sport === "soccer"
     ? [...new Set([...SOCCER_FLD_STATS, ...SOCCER_GK_STATS])]
     : (STAT_MAPS[sport] ?? STAT_MAPS.basketball);
 
   const roster = (await fetchRoster(sport, league, teamMeta.id)).slice(0, limit);
-
   const players = await Promise.all(roster.map(async (p) => {
     const isGK = ["GK","G","Goalkeeper","Portero"].includes(p.position);
-    const keys = sport === "soccer"
-      ? (isGK ? SOCCER_GK_STATS : SOCCER_FLD_STATS)
-      : wantKeys;
+    const keys = sport === "soccer" ? (isGK ? SOCCER_GK_STATS : SOCCER_FLD_STATS) : wantKeys;
     return { ...p, stats: p.id ? await fetchStats(sport, league, p.id, keys) : {} };
   }));
 
   return { ...teamMeta, players };
 }
 
-// ─── Main handler ─────────────────────────────────────────────────────────────
+// ─── Predicción ──────────────────────────────────────────────────────────────
+
+function avg(arr) {
+  const vals = arr.filter(v => v != null && !isNaN(v));
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+}
+
+function poissonProb(lambda, k) {
+  if (lambda <= 0) return k === 0 ? 1 : 0;
+  let p = Math.exp(-lambda);
+  for (let i = 1; i <= k; i++) p *= lambda / i;
+  return p;
+}
+
+function poissonMatch(lambdaH, lambdaA, max = 8) {
+  let homeWin = 0, draw = 0, awayWin = 0;
+  let mostLikelyScore = { h: 0, a: 0, p: 0 };
+  for (let h = 0; h <= max; h++) {
+    for (let a = 0; a <= max; a++) {
+      const p = poissonProb(lambdaH, h) * poissonProb(lambdaA, a);
+      if (h > a) homeWin += p;
+      else if (h === a) draw += p;
+      else awayWin += p;
+      if (p > mostLikelyScore.p) mostLikelyScore = { h, a, p };
+    }
+  }
+  return { homeWin, draw, awayWin, mostLikelyScore };
+}
+
+function predictMatch(sport, homePlayers, awayPlayers) {
+  if (sport === "soccer") {
+    // Goles esperados = suma de goles de jugadores de campo / partidos jugados promedio
+    const fldH = homePlayers.filter(p => !["GK","G"].includes(p.position));
+    const fldA = awayPlayers.filter(p => !["GK","G"].includes(p.position));
+    const goalsH = fldH.reduce((s, p) => s + (p.stats.G || 0), 0);
+    const goalsA = fldA.reduce((s, p) => s + (p.stats.G || 0), 0);
+    const appsH  = avg(fldH.map(p => p.stats.APP)) || 20;
+    const appsA  = avg(fldA.map(p => p.stats.APP)) || 20;
+    const lambdaH = Math.max(0.3, (goalsH / appsH) * 1.1); // leve ventaja local
+    const lambdaA = Math.max(0.3,  goalsA / appsA);
+    const { homeWin, draw, awayWin, mostLikelyScore } = poissonMatch(lambdaH, lambdaA);
+    return {
+      method: "Distribución de Poisson sobre goles de temporada",
+      home_win_pct:  Math.round(homeWin * 100),
+      draw_pct:      Math.round(draw    * 100),
+      away_win_pct:  Math.round(awayWin * 100),
+      predicted_score: `${mostLikelyScore.h} - ${mostLikelyScore.a}`,
+      home_xg: Math.round(lambdaH * 10) / 10,
+      away_xg: Math.round(lambdaA * 10) / 10,
+    };
+  }
+
+  if (sport === "basketball") {
+    const ptsH = avg(homePlayers.map(p => p.stats.PTS));
+    const ptsA = avg(awayPlayers.map(p => p.stats.PTS));
+    const rebH = avg(homePlayers.map(p => p.stats.REB));
+    const rebA = avg(awayPlayers.map(p => p.stats.REB));
+    const astH = avg(homePlayers.map(p => p.stats.AST));
+    const astA = avg(awayPlayers.map(p => p.stats.AST));
+    // Score ofensivo ponderado
+    const offH = ptsH * 1.0 + rebH * 0.3 + astH * 0.5;
+    const offA = ptsA * 1.0 + rebA * 0.3 + astA * 0.5;
+    const total = offH + offA || 1;
+    const homeWin = (offH / total) * 0.95 + 0.05; // pequeña ventaja de cancha
+    // Marcador estimado: promedio NBA ~115pts por equipo como base
+    const scaleH = Math.round(105 + (offH / total - 0.5) * 30);
+    const scaleA = Math.round(105 - (offH / total - 0.5) * 30);
+    return {
+      method: "Índice ofensivo ponderado (PTS + REB + AST)",
+      home_win_pct: Math.round(Math.min(homeWin, 0.85) * 100),
+      draw_pct: 0,
+      away_win_pct: Math.round((1 - Math.min(homeWin, 0.85)) * 100),
+      predicted_score: `${scaleH} - ${scaleA}`,
+      home_avg_pts: Math.round(ptsH * 10) / 10,
+      away_avg_pts: Math.round(ptsA * 10) / 10,
+    };
+  }
+
+  if (sport === "hockey") {
+    const gfH = avg(homePlayers.map(p => p.stats.G));
+    const gfA = avg(awayPlayers.map(p => p.stats.G));
+    const lambdaH = Math.max(0.5, gfH * 3.5 + 0.2);
+    const lambdaA = Math.max(0.5, gfA * 3.5);
+    const { homeWin, draw, awayWin, mostLikelyScore } = poissonMatch(lambdaH, lambdaA, 10);
+    return {
+      method: "Poisson sobre promedio de goles por jugador",
+      home_win_pct: Math.round(homeWin * 100),
+      draw_pct:     Math.round(draw    * 100),
+      away_win_pct: Math.round(awayWin * 100),
+      predicted_score: `${mostLikelyScore.h} - ${mostLikelyScore.a}`,
+    };
+  }
+
+  if (sport === "baseball") {
+    const avgH = avg(homePlayers.map(p => p.stats.AVG));
+    const avgA = avg(awayPlayers.map(p => p.stats.AVG));
+    const rbiH = avg(homePlayers.map(p => p.stats.RBI));
+    const rbiA = avg(awayPlayers.map(p => p.stats.RBI));
+    const offH = avgH * 10 + rbiH * 0.1;
+    const offA = avgA * 10 + rbiA * 0.1;
+    const total = offH + offA || 1;
+    const homeWin = (offH / total) * 0.94 + 0.05;
+    const runsH = Math.round(3 + (offH / total - 0.5) * 6);
+    const runsA = Math.round(3 - (offH / total - 0.5) * 6);
+    return {
+      method: "Índice ofensivo (AVG + RBI)",
+      home_win_pct: Math.round(Math.min(homeWin, 0.82) * 100),
+      draw_pct: 0,
+      away_win_pct: Math.round((1 - Math.min(homeWin, 0.82)) * 100),
+      predicted_score: `${Math.max(runsH, 1)} - ${Math.max(runsA, 1)}`,
+    };
+  }
+
+  if (sport === "football") {
+    const pydsH = avg(homePlayers.map(p => p.stats.PYDS));
+    const pydsA = avg(awayPlayers.map(p => p.stats.PYDS));
+    const ruydsH = avg(homePlayers.map(p => p.stats.RUYDS));
+    const ruydsA = avg(awayPlayers.map(p => p.stats.RUYDS));
+    const offH = (pydsH || 0) + (ruydsH || 0);
+    const offA = (pydsA || 0) + (ruydsA || 0);
+    const total = offH + offA || 1;
+    const homeWin = (offH / total) * 0.93 + 0.05;
+    const ptsH = Math.round(17 + (offH / total - 0.5) * 28);
+    const ptsA = Math.round(17 - (offH / total - 0.5) * 28);
+    return {
+      method: "Yardas totales (pase + corrida)",
+      home_win_pct: Math.round(Math.min(homeWin, 0.82) * 100),
+      draw_pct: 0,
+      away_win_pct: Math.round((1 - Math.min(homeWin, 0.82)) * 100),
+      predicted_score: `${Math.max(ptsH, 3)} - ${Math.max(ptsA, 3)}`,
+    };
+  }
+
+  return null;
+}
+
+// ─── Main handler ────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -206,7 +318,6 @@ export default async function handler(req, res) {
       if (!m.home || !m.away) throw new Error(`No se encontraron los equipos del partido ${event_id}`);
       homeMeta = m.home; awayMeta = m.away; meta = m.meta;
     } else {
-      // Resolver por nombre o id
       let hId = home_id, aId = away_id;
       if (!hId) {
         if (!home) throw new Error("Falta 'event_id' o ('home' y 'away')");
@@ -222,11 +333,12 @@ export default async function handler(req, res) {
       awayMeta = { id: aId, name: away || `Equipo ${aId}`, abbr: "", logo: "" };
     }
 
-    // Construir ambos equipos en paralelo
     const [homeTeam, awayTeam] = await Promise.all([
       buildTeam(sport, league, homeMeta, maxPlayers),
       buildTeam(sport, league, awayMeta, maxPlayers),
     ]);
+
+    const prediction = predictMatch(sport, homeTeam.players, awayTeam.players);
 
     const wantKeys = sport === "soccer"
       ? [...new Set([...SOCCER_FLD_STATS, ...SOCCER_GK_STATS])]
@@ -240,6 +352,7 @@ export default async function handler(req, res) {
       league_name: SOCCER_LEAGUES[league] ?? league.toUpperCase(),
       match: meta,
       stat_labels: statLabels,
+      prediction,
       home: homeTeam,
       away: awayTeam,
     });
