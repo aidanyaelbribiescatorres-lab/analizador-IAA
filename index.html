@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEON BET AI</title>
+<style>
+  :root { --neon:#00FF41; --dark:#050505; --panel:#0a0f0a; --dim:#888; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    background:var(--dark); color:var(--neon);
+    font-family:'Courier New', monospace;
+    min-height:100vh; padding:16px;
+  }
+  h1,h2,h3 { text-shadow:0 0 6px var(--neon); }
+  .wrap { max-width:1100px; margin:0 auto; }
+
+  header {
+    display:flex; justify-content:space-between; align-items:center;
+    border-bottom:1px solid var(--neon); padding-bottom:12px; margin-bottom:16px;
+    flex-wrap:wrap; gap:12px;
+  }
+  header h1 { font-size:1.6rem; }
+  .cap { text-align:right; }
+  .cap .lbl { color:var(--dim); font-size:.7rem; }
+  .cap .val { font-size:1.4rem; }
+
+  .controls { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px; }
+  select, input, button, textarea {
+    background:#000; color:var(--neon); border:1px solid var(--neon);
+    border-radius:5px; padding:8px 12px; font-family:inherit; font-size:.9rem;
+  }
+  button { cursor:pointer; transition:all .25s; }
+  button:hover { background:var(--neon); color:#000; box-shadow:0 0 12px var(--neon); }
+  input::placeholder, textarea::placeholder { color:#0a5; }
+
+  .tabs { display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid #033; flex-wrap:wrap; }
+  .tab { padding:10px 16px; border:1px solid transparent; border-bottom:none;
+         border-radius:6px 6px 0 0; opacity:.6; }
+  .tab.active { opacity:1; border-color:var(--neon); background:var(--panel); }
+
+  .panel { display:none; }
+  .panel.active { display:block; }
+
+  .card {
+    background:var(--panel); border:1px solid #052; border-radius:8px;
+    padding:14px; margin-bottom:12px;
+  }
+  .game-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+  .badge { font-size:.7rem; padding:2px 8px; border-radius:10px; border:1px solid var(--neon); }
+  .badge.live { background:#300; border-color:#f33; color:#f55; animation:pulse 1.5s infinite; }
+  .badge.final { color:var(--dim); border-color:var(--dim); }
+  @keyframes pulse { 50% { opacity:.4; } }
+
+  .teams-row { display:flex; justify-content:space-between; align-items:center; }
+  .team { display:flex; align-items:center; gap:8px; }
+  .team img { width:28px; height:28px; }
+  .score { font-size:1.5rem; font-weight:bold; }
+
+  table { width:100%; border-collapse:collapse; font-size:.8rem; margin-top:8px; }
+  th, td { padding:5px 6px; text-align:center; border-bottom:1px solid #042; }
+  th { color:var(--dim); font-weight:normal; }
+  td.name { text-align:left; white-space:nowrap; }
+
+  .two-col { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  @media (max-width:700px){ .two-col{ grid-template-columns:1fr; } }
+
+  .loading { color:var(--dim); padding:20px; text-align:center; }
+  .err { color:#f55; border:1px solid #f55; padding:10px; border-radius:6px; margin:8px 0; }
+
+  .drop {
+    border:2px dashed var(--neon); border-radius:10px; padding:30px;
+    text-align:center; cursor:pointer; margin-bottom:14px;
+  }
+  .drop:hover { background:#031; }
+  #preview-img { max-width:100%; max-height:300px; border-radius:8px; margin-top:10px; }
+
+  .kv { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #042; }
+  .kv .k { color:var(--dim); }
+  .small { font-size:.75rem; color:var(--dim); }
+  .green { color:var(--neon); } .red { color:#f55; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>🧠 NEON BET AI</h1>
+      <div class="small">SYSTEM ONLINE // NBA · NFL · MLB · NHL · Fútbol</div>
+    </div>
+    <div class="cap">
+      <div class="lbl">CAPITAL DISPONIBLE</div>
+      <div class="val" id="capital">$0.00</div>
+    </div>
+  </header>
+
+  <div class="controls">
+    <select id="sport"></select>
+    <button onclick="loadLive()">🔄 Cargar partidos</button>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="live">📡 En Vivo</div>
+    <div class="tab" data-tab="preview">📊 Promedios (Preview)</div>
+    <div class="tab" data-tab="ticket">🎫 Analizar Comprobante</div>
+    <div class="tab" data-tab="conta">💰 Mi Contabilidad</div>
+  </div>
+
+  <!-- ── LIVE ── -->
+  <div class="panel active" id="panel-live">
+    <div id="live-content" class="loading">Selecciona un deporte y pulsa "Cargar partidos".</div>
+  </div>
+
+  <!-- ── PREVIEW ── -->
+  <div class="panel" id="panel-preview">
+    <div class="controls">
+      <input id="pv-home" placeholder="Equipo local (ej: Lakers)" />
+      <input id="pv-away" placeholder="Equipo visitante (ej: Celtics)" />
+      <button onclick="loadPreview()">Ver promedios</button>
+    </div>
+    <div class="small">Tip: o pega un event_id de un partido de la pestaña "En Vivo".</div>
+    <input id="pv-event" placeholder="o event_id (opcional)" style="margin-top:8px;width:100%" />
+    <div id="preview-content" style="margin-top:14px"></div>
+  </div>
+
+  <!-- ── TICKET ── -->
+  <div class="panel" id="panel-ticket">
+    <div class="drop" id="drop" onclick="document.getElementById('file').click()">
+      📷 Toca aquí para subir la foto de tu comprobante
+      <input type="file" id="file" accept="image/*" hidden />
+    </div>
+    <img id="preview-img" style="display:none" />
+    <button onclick="analizarTicket()" id="btn-analizar" style="display:none">🔍 Analizar apuesta</button>
+    <div id="ticket-content" style="margin-top:14px"></div>
+  </div>
+
+  <!-- ── CONTABILIDAD ── -->
+  <div class="panel" id="panel-conta">
+    <div class="card">
+      <h3>Resumen</h3>
+      <div id="conta-stats"></div>
+    </div>
+    <h3 style="margin:12px 0">Historial de apuestas</h3>
+    <div id="conta-list"></div>
+    <button onclick="resetHist()" style="margin-top:12px">🗑 Borrar historial</button>
+  </div>
+
+</div>
+
+<script>
+const SPORTS = {
+  "🏀 NBA":              { sport:"basketball", league:"nba" },
+  "🏈 NFL":              { sport:"football",   league:"nfl" },
+  "⚾ MLB":              { sport:"baseball",   league:"mlb" },
+  "🏒 NHL":              { sport:"hockey",     league:"nhl" },
+  "⚽ Premier League":   { sport:"soccer",     league:"eng.1" },
+  "⚽ La Liga":          { sport:"soccer",     league:"esp.1" },
+  "⚽ Champions League": { sport:"soccer",     league:"uefa.champions" },
+  "⚽ Liga MX":          { sport:"soccer",     league:"mex.1" },
+  "⚽ MLS":              { sport:"soccer",     league:"usa.1" },
+  "⚽ Serie A":          { sport:"soccer",     league:"ita.1" },
+  "⚽ Bundesliga":       { sport:"soccer",     league:"ger.1" },
+};
+
+// ── Setup sport selector ──
+const sel = document.getElementById("sport");
+for (const name in SPORTS) {
+  const o = document.createElement("option");
+  o.value = name; o.textContent = name; sel.appendChild(o);
+}
+function cfg(){ return SPORTS[sel.value]; }
+
+// ── Tabs ──
+document.querySelectorAll(".tab").forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
+    t.classList.add("active");
+    document.getElementById("panel-" + t.dataset.tab).classList.add("active");
+    if (t.dataset.tab === "conta") renderConta();
+  };
+});
+
+// ── Capital / historial (localStorage) ──
+function getHist(){ try { return JSON.parse(localStorage.getItem("neonbet_hist")||"[]"); } catch { return []; } }
+function setHist(h){ localStorage.setItem("neonbet_hist", JSON.stringify(h)); updateCapital(); }
+function getSaldo(){ return parseFloat(localStorage.getItem("neonbet_saldo")||"100"); }
+function updateCapital(){
+  const net = getHist().reduce((s,b)=> s + (b.resultado==="ganada"?(b.ganancia_potencial-b.monto_apostado||0):b.resultado==="perdida"?-(b.monto_apostado||0):0), 0);
+  document.getElementById("capital").textContent = "$" + (getSaldo()+net).toFixed(2);
+}
+
+// ── LIVE ──
+async function loadLive(){
+  const c = cfg();
+  const box = document.getElementById("live-content");
+  box.innerHTML = '<div class="loading">🔄 Cargando partidos...</div>';
+  try {
+    const r = await fetch(`/api/live?sport=${c.sport}&league=${c.league}`);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    if (!d.games || !d.games.length) { box.innerHTML = '<div class="loading">Sin partidos hoy.</div>'; return; }
+    const labels = d.stat_labels || {};
+    box.innerHTML = d.games.map(g => gameCard(g, labels)).join("");
+  } catch(e){ box.innerHTML = `<div class="err">Error: ${e.message}</div>`; }
+}
+
+function gameCard(g, labels){
+  const t = g.teams || [];
+  const home = t.find(x=>x.home) || t[0] || {};
+  const away = t.find(x=>!x.home) || t[1] || {};
+  const cls = g.is_live ? "live" : g.is_final ? "final" : "";
+  let box = "";
+  if (g.box_score && g.box_score.length){
+    box = g.box_score.map(team => boxTable(team, labels)).join("");
+  }
+  return `<div class="card">
+    <div class="game-head">
+      <span class="badge ${cls}">${g.status||""}</span>
+      <span class="small">${g.event_id?("ID: "+g.event_id):""}</span>
+    </div>
+    <div class="teams-row">
+      <div class="team">${away.logo?`<img src="${away.logo}">`:""}<span>${away.name||""}</span></div>
+      <div class="score">${away.score||"—"} : ${home.score||"—"}</div>
+      <div class="team"><span>${home.name||""}</span>${home.logo?`<img src="${home.logo}">`:""}</div>
+    </div>
+    ${box}
+    ${g.event_id?`<button style="margin-top:10px" onclick="previewFromId('${g.event_id}')">📊 Ver promedios</button>`:""}
+  </div>`;
+}
+
+function boxTable(team, labels){
+  if (!team.players || !team.players.length) return "";
+  const keys = Object.keys(team.players[0].stats || {});
+  const head = keys.map(k => `<th>${labels[k]||k}</th>`).join("");
+  const rows = team.players.map(p =>
+    `<tr><td class="name">${p.name}</td>${keys.map(k=>`<td>${p.stats[k]??"-"}</td>`).join("")}</tr>`
+  ).join("");
+  return `<div class="small" style="margin-top:10px">${team.name}</div>
+    <table><tr><th class="name">Jugador</th>${head}</tr>${rows}</table>`;
+}
+
+// ── PREVIEW ──
+function previewFromId(id){
+  // jump to preview tab with event_id
+  document.querySelector('.tab[data-tab="preview"]').click();
+  document.getElementById("pv-event").value = id;
+  loadPreview();
+}
+
+async function loadPreview(){
+  const c = cfg();
+  const home = document.getElementById("pv-home").value.trim();
+  const away = document.getElementById("pv-away").value.trim();
+  const eid  = document.getElementById("pv-event").value.trim();
+  const box = document.getElementById("preview-content");
+  let qs = `sport=${c.sport}&league=${c.league}`;
+  if (eid) qs += `&event_id=${eid}`;
+  else if (home && away) qs += `&home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`;
+  else { box.innerHTML = `<div class="err">Ingresa dos equipos o un event_id.</div>`; return; }
+
+  box.innerHTML = '<div class="loading">🔄 Cargando promedios...</div>';
+  try {
+    const r = await fetch(`/api/preview?${qs}`);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    const labels = d.stat_labels || {};
+    box.innerHTML = `<div class="two-col">
+      ${teamPanel(d.home, labels)}
+      ${teamPanel(d.away, labels)}
+    </div>`;
+  } catch(e){ box.innerHTML = `<div class="err">Error: ${e.message}</div>`; }
+}
+
+function teamPanel(team, labels){
+  if (!team) return "";
+  return `<div class="card">
+    <div class="team" style="margin-bottom:8px">${team.logo?`<img src="${team.logo}">`:""}<h3>${team.name||""}</h3></div>
+    ${boxTable(team, labels)}
+  </div>`;
+}
+
+// ── TICKET (comprobante) ──
+let ticketBase64 = null, ticketType = "image/jpeg";
+document.getElementById("file").addEventListener("change", e => {
+  const f = e.target.files[0]; if (!f) return;
+  ticketType = f.type || "image/jpeg";
+  const reader = new FileReader();
+  reader.onload = () => {
+    ticketBase64 = reader.result;
+    const img = document.getElementById("preview-img");
+    img.src = ticketBase64; img.style.display = "block";
+    document.getElementById("btn-analizar").style.display = "inline-block";
+  };
+  reader.readAsDataURL(f);
+});
+
+async function analizarTicket(){
+  if (!ticketBase64) return;
+  const box = document.getElementById("ticket-content");
+  box.innerHTML = '<div class="loading">🔄 Analizando comprobante con IA...</div>';
+  try {
+    const r = await fetch("/api/analizar-comprobante", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ image: ticketBase64, mediaType: ticketType })
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "Error analizando");
+    const a = d.apuesta;
+    box.innerHTML = `<div class="card">
+      <h3>Apuesta detectada</h3>
+      ${kv("Casa", a.casa)}
+      ${kv("Evento", a.evento)}
+      ${kv("Selección", a.seleccion)}
+      ${kv("Monto apostado", a.monto_apostado!=null?`${a.moneda||""} ${a.monto_apostado}`:null)}
+      ${kv("Cuota", a.cuota)}
+      ${kv("Ganancia potencial", a.ganancia_potencial!=null?`${a.moneda||""} ${a.ganancia_potencial}`:null)}
+      ${kv("Estado", a.estado)}
+      ${kv("Fecha", a.fecha)}
+      <button style="margin-top:12px" onclick='saveBet(${JSON.stringify(JSON.stringify(a))})'>💾 Guardar en mi contabilidad</button>
+    </div>`;
+  } catch(e){ box.innerHTML = `<div class="err">Error: ${e.message}</div>`; }
+}
+function kv(k,v){ return v==null||v===""?"":`<div class="kv"><span class="k">${k}</span><span>${v}</span></div>`; }
+
+function saveBet(json){
+  const a = JSON.parse(json);
+  const h = getHist();
+  h.unshift({ ...a, resultado:"pendiente", ts:Date.now() });
+  setHist(h);
+  alert("✅ Apuesta guardada en tu contabilidad");
+}
+
+// ── CONTABILIDAD ──
+function renderConta(){
+  const h = getHist();
+  const ganadas = h.filter(b=>b.resultado==="ganada").length;
+  const perdidas = h.filter(b=>b.resultado==="perdida").length;
+  const total = h.reduce((s,b)=>s+(b.monto_apostado||0),0);
+  const net = h.reduce((s,b)=> s + (b.resultado==="ganada"?((b.ganancia_potencial||0)-(b.monto_apostado||0)):b.resultado==="perdida"?-(b.monto_apostado||0):0),0);
+  document.getElementById("conta-stats").innerHTML =
+    kv("Total apuestas", h.length) +
+    kv("Total apostado", "$"+total.toFixed(2)) +
+    kv("Ganadas", ganadas) + kv("Perdidas", perdidas) +
+    `<div class="kv"><span class="k">Ganancia neta</span><span class="${net>=0?'green':'red'}">$${net.toFixed(2)}</span></div>`;
+
+  document.getElementById("conta-list").innerHTML = h.length ? h.map((b,i)=>`
+    <div class="card">
+      <div class="game-head">
+        <strong>${b.evento||b.seleccion||"Apuesta"}</strong>
+        <span class="badge">${b.resultado}</span>
+      </div>
+      <div class="small">${b.casa||""} · ${b.moneda||""} ${b.monto_apostado||"?"} @ ${b.cuota||"?"}</div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        <button onclick="setResult(${i},'ganada')">✅ Ganada</button>
+        <button onclick="setResult(${i},'perdida')">❌ Perdida</button>
+        <button onclick="delBet(${i})">🗑</button>
+      </div>
+    </div>`).join("") : '<div class="loading">Sin apuestas registradas.</div>';
+}
+function setResult(i,r){ const h=getHist(); h[i].resultado=r; setHist(h); renderConta(); }
+function delBet(i){ const h=getHist(); h.splice(i,1); setHist(h); renderConta(); }
+function resetHist(){ if(confirm("¿Borrar todo el historial?")){ localStorage.removeItem("neonbet_hist"); updateCapital(); renderConta(); } }
+
+// ── Init ──
+updateCapital();
+</script>
+</body>
+</html>
