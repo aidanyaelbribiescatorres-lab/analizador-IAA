@@ -303,7 +303,7 @@ export default async function handler(req, res) {
       fetchRosterLight(sport, league, awayMeta.id),
     ]);
 
-    const prediction = makePrediction(sport, homeStats, awayStats, homeMeta.name, awayMeta.name);
+    const prediction = null;
     const keys = TEAM_STAT_KEYS[sport] ?? TEAM_STAT_KEYS.basketball;
 
     res.setHeader("Cache-Control", "s-maxage=1800, stale-while-revalidate=3600");

@@ -319,7 +319,6 @@ async function loadPreview(){
 
     box.innerHTML = `
       ${matchDate?`<div class="small" style="text-align:center;margin-bottom:8px">📅 ${matchDate}${d.match?.venue?" · "+d.match.venue:""}</div>`:""}
-      ${pred ? predCard(pred, d.away?.name||"Visitante", d.home?.name||"Local") : ""}
       <div class="two-col">
         ${teamStatPanel(d.away, d.stat_keys||[], labels, "Visitante")}
         ${teamStatPanel(d.home, d.stat_keys||[], labels, "Local")}
