@@ -307,9 +307,9 @@ async function loadPreview(){
   else if (home&&away) qs += `&home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`;
   else { box.innerHTML = `<div class="err">Ingresa dos equipos o un event_id.</div>`; return; }
 
-  box.innerHTML = '<div class="loading">🔄 Calculando promedios y predicción... (puede tardar ~20 seg)</div>';
+  box.innerHTML = '<div class="loading">🔄 Calculando predicción... (5-8 seg)</div>';
   try {
-    const r = await fetch(`/api/preview?${qs}&limit=15`);
+    const r = await fetch(`/api/preview?${qs}`);
     const d = await r.json();
     if (d.error) throw new Error(d.error);
 
@@ -321,8 +321,12 @@ async function loadPreview(){
       ${matchDate?`<div class="small" style="text-align:center;margin-bottom:8px">📅 ${matchDate}${d.match?.venue?" · "+d.match.venue:""}</div>`:""}
       ${pred ? predCard(pred, d.away?.name||"Visitante", d.home?.name||"Local") : ""}
       <div class="two-col">
-        ${teamPanel(d.away, labels, "Visitante")}
-        ${teamPanel(d.home, labels, "Local")}
+        ${teamStatPanel(d.away, d.stat_keys||[], labels, "Visitante")}
+        ${teamStatPanel(d.home, d.stat_keys||[], labels, "Local")}
+      </div>
+      <div class="two-col" style="margin-top:12px">
+        ${rosterPanel(d.away, "Visitante")}
+        ${rosterPanel(d.home, "Local")}
       </div>`;
   } catch(e){ box.innerHTML = `<div class="err">Error: ${e.message}</div>`; }
 }
@@ -330,56 +334,47 @@ async function loadPreview(){
 function predCard(pred, awayName, homeName){
   const winner = pred.home_win_pct > pred.away_win_pct ? homeName : pred.away_win_pct > pred.home_win_pct ? awayName : "Empate técnico";
   const winnerPct = Math.max(pred.home_win_pct, pred.away_win_pct, pred.draw_pct||0);
-
-  const homeBar  = `<div class="pred-row"><span class="pred-label">${homeName}</span><div class="pred-bar-wrap"><div class="pred-bar bar-home" style="width:${pred.home_win_pct}%"></div></div><span class="pred-pct">${pred.home_win_pct}%</span></div>`;
-  const drawBar  = pred.draw_pct > 0 ? `<div class="pred-row"><span class="pred-label">Empate</span><div class="pred-bar-wrap"><div class="pred-bar bar-draw" style="width:${pred.draw_pct}%"></div></div><span class="pred-pct">${pred.draw_pct}%</span></div>` : "";
-  const awayBar  = `<div class="pred-row"><span class="pred-label">${awayName}</span><div class="pred-bar-wrap"><div class="pred-bar bar-away" style="width:${pred.away_win_pct}%"></div></div><span class="pred-pct">${pred.away_win_pct}%</span></div>`;
-
-  const extra = [];
-  if (pred.home_xg != null) extra.push(`xG: ${awayName} ${pred.away_xg} — ${homeName} ${pred.home_xg}`);
-  if (pred.home_avg_pts != null) extra.push(`Avg PTS: ${awayName} ${pred.away_avg_pts} — ${homeName} ${pred.home_avg_pts}`);
-
+  const homeBar = `<div class="pred-row"><span class="pred-label">${homeName}</span><div class="pred-bar-wrap"><div class="pred-bar bar-home" style="width:${pred.home_win_pct}%"></div></div><span class="pred-pct">${pred.home_win_pct}%</span></div>`;
+  const drawBar = pred.draw_pct > 0 ? `<div class="pred-row"><span class="pred-label">Empate</span><div class="pred-bar-wrap"><div class="pred-bar bar-draw" style="width:${pred.draw_pct}%"></div></div><span class="pred-pct">${pred.draw_pct}%</span></div>` : "";
+  const awayBar = `<div class="pred-row"><span class="pred-label">${awayName}</span><div class="pred-bar-wrap"><div class="pred-bar bar-away" style="width:${pred.away_win_pct}%"></div></div><span class="pred-pct">${pred.away_win_pct}%</span></div>`;
   return `<div class="pred-box">
     <div class="pred-title">🎯 PREDICCIÓN</div>
     <div class="pred-score">${pred.predicted_score}</div>
     <div class="pred-winner">Favorito: <strong>${winner}</strong> (${winnerPct}%)</div>
     <div class="pred-bars">${awayBar}${drawBar}${homeBar}</div>
-    ${extra.length?`<div class="pred-method">${extra.join(" · ")}</div>`:""}
+    ${pred.extra?`<div class="pred-method">${pred.extra}</div>`:""}
     <div class="pred-method">Método: ${pred.method}</div>
   </div>`;
 }
 
-function teamPanel(team, labels, role){
+function teamStatPanel(team, keys, labels, role){
   if (!team) return "";
-  const keys = STAT_MAPS_FRONT[cfg().sport] || [];
+  const stats = team.stats || {};
+  const validKeys = keys.filter(k => stats[k] != null);
+  const rows = validKeys.map(k =>
+    `<div class="kv"><span class="k">${labels[k]||k}</span><span>${stats[k]}</span></div>`
+  ).join("") || '<div class="small">Stats de equipo no disponibles esta temporada.</div>';
   return `<div class="card">
     <div class="team" style="margin-bottom:8px">
-      ${team.logo?`<img src="${team.logo}">`:""}
+      ${team.logo?`<img src="${team.logo}" style="width:32px;height:32px">`:""}
       <h3>${team.name||role}</h3>
-      <span class="small" style="margin-left:4px">(${role})</span>
+      <span class="small">(${role})</span>
     </div>
-    ${playerTable(team.players||[], labels)}
+    ${rows}
   </div>`;
 }
 
-function playerTable(players, labels){
-  const withStats = players.filter(p => Object.keys(p.stats||{}).length > 0);
-  if (!withStats.length) return '<div class="small">Sin estadísticas disponibles.</div>';
-  const keys = Object.keys(withStats[0].stats);
-  const head = keys.map(k=>`<th>${labels[k]||k}</th>`).join("");
-  const rows = withStats.map(p =>
-    `<tr><td class="name">${p.jersey?`#${p.jersey} `:""}${p.name}</td>${keys.map(k=>`<td>${p.stats[k]??"-"}</td>`).join("")}</tr>`
+function rosterPanel(team, role){
+  if (!team || !team.roster?.length) return "";
+  const players = team.roster.slice(0,12);
+  const rows = players.map(p =>
+    `<div class="kv"><span class="k">${p.jersey?`#${p.jersey}`:"–"} ${p.position||""}</span><span>${p.name}</span></div>`
   ).join("");
-  return `<table><tr><th class="name">Jugador</th>${head}</tr>${rows}</table>`;
+  return `<div class="card">
+    <h3 style="margin-bottom:8px">${team.name||role} — Plantel</h3>
+    ${rows}
+  </div>`;
 }
-
-const STAT_MAPS_FRONT = {
-  basketball:["PTS","REB","AST","3PM","FG%","STL","BLK","TO"],
-  football:  ["PYDS","PTD","RUYDS","RUTD","REC","REYDS","SACKS","INT"],
-  baseball:  ["AVG","HR","RBI","SB","OBP","SLG","ERA","WHIP"],
-  hockey:    ["G","A","PTS","+/-","SOG","SV%"],
-  soccer:    ["G","A","SH","SHG","FC","YC","APP"],
-};
 
 // ── TICKET / COMPROBANTE ─────────────────────────────────────────────────────
 let ticketBase64 = null, ticketType = "image/jpeg";
